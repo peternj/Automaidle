@@ -80,6 +80,13 @@ export function update(state: GameState): UpdateResult {
       const adjusted = isSmelterCoal ? amt * smelterEff : amt
       if ((resources[res] ?? 0) < adjusted * count) { canRun = false; break }
     }
+    // Skip if all outputs are at cap — no point consuming inputs for zero production
+    if (canRun) {
+      const hasRoom = Object.keys(cfg.production).some(
+        res => (resources[res as ResourceKey] ?? 0) < RESOURCES[res as ResourceKey].cap
+      )
+      if (!hasRoom) canRun = false
+    }
     if (!canRun) continue
 
     // Consume
