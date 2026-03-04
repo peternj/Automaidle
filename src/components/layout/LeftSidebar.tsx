@@ -7,68 +7,102 @@ function fmt(n: number) {
   return Math.floor(n).toString()
 }
 
+/** Map resource color → CSS custom prop or hex for gauge fill */
+function gaugeColor(resourceColor: string): string {
+  // resourceColor is already a hex / css value from config
+  return resourceColor
+}
+
 export function LeftSidebar() {
-  const resources      = useGameStore(s => s.resources)
+  const resources       = useGameStore(s => s.resources)
   const productionRates = useGameStore(s => s.productionRates)
-  const upgrades       = useGameStore(s => s.upgrades)
-  const manualMine     = useGameStore(s => s.manualMine)
+  const upgrades        = useGameStore(s => s.upgrades)
+  const manualMine      = useGameStore(s => s.manualMine)
 
   const clickYield = upgrades.betterPickaxe ? UPGRADES.betterPickaxe.value : 1
 
-  function mineBtn(resource: ResourceKey, label: string, icon: string, hoverClass: string) {
+  function MineButton({ resource, label, icon }: { resource: ResourceKey; label: string; icon: string }) {
     return (
       <button
-        key={resource}
         onClick={() => manualMine(resource)}
-        className={`w-full px-4 py-3 bg-slate-700 ${hoverClass} active:scale-95 rounded-xl font-medium transition-all flex items-center justify-between group`}
+        className="cr-btn cr-btn-cyan w-full flex items-center justify-between"
+        style={{ padding: '7px 10px' }}
       >
         <span className="flex items-center gap-2">
-          <span className="text-lg">{icon}</span>
-          <div className="text-left">
-            <div className="text-sm">Mine {label}</div>
-            <div className="text-xs text-slate-400 group-hover:text-blue-200">+{clickYield} per click</div>
-          </div>
+          <span style={{ fontSize: 14 }}>{icon}</span>
+          <span>MINE {label.toUpperCase()}</span>
         </span>
-        <span className="text-xs text-slate-500 bg-slate-800 px-2 py-1 rounded">CLICK</span>
+        <span style={{ opacity: 0.5, fontSize: 9 }}>+{clickYield}/CLICK</span>
       </button>
     )
   }
 
   return (
-    <aside className="w-72 bg-slate-900 border-r border-slate-700 flex flex-col overflow-y-auto">
+    <aside
+      className="flex flex-col overflow-y-auto"
+      style={{
+        width: 268,
+        background: 'var(--c-panel)',
+        borderRight: '1px solid var(--c-border)',
+        flexShrink: 0,
+      }}
+    >
+      {/* ── Resource gauges ── */}
+      <section className="p-4" style={{ borderBottom: '1px solid var(--c-border)' }}>
+        <div className="cr-label mb-3">📦 Resources</div>
 
-      {/* Resources */}
-      <section className="p-4 border-b border-slate-700">
-        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">📦 Resources</h2>
-        <div className="space-y-2">
+        <div className="flex flex-col gap-3">
           {RESOURCE_KEYS.map(key => {
             const cfg  = RESOURCES[key]
             const val  = resources[key] ?? 0
-            const pct  = (val / cfg.cap) * 100
+            const pct  = Math.min((val / cfg.cap) * 100, 100)
             const rate = productionRates[key] ?? 0
+            const isFull = pct >= 99.5
+
             return (
-              <div key={key} className="bg-slate-800 rounded-lg p-2.5">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-sm flex items-center gap-1.5">
-                    <span>{cfg.icon}</span>
-                    <span className="text-slate-300">{cfg.label}</span>
+              <div key={key}>
+                {/* Label row */}
+                <div className="flex items-center justify-between mb-1">
+                  <span className="flex items-center gap-1.5">
+                    {/* status LED */}
+                    <span
+                      className={`cr-led ${
+                        rate > 0  ? 'cr-led-green'
+                        : rate < 0 ? 'cr-led-amber'
+                        :            'cr-led-dim'
+                      }`}
+                    />
+                    <span style={{ fontSize: 13, color: 'var(--c-text)' }}>
+                      {cfg.icon} {cfg.label}
+                    </span>
                   </span>
-                  <span className="font-mono text-xs text-white font-medium">
-                    {fmt(val)}<span className="text-slate-600">/{cfg.cap}</span>
+                  <span className="cr-value" style={{ fontSize: 11 }}>
+                    {fmt(val)}<span style={{ color: 'var(--c-dim)', fontWeight: 400 }}>/{cfg.cap}</span>
                   </span>
                 </div>
-                <div className="w-full bg-slate-700 rounded-full h-1.5 mb-1">
+
+                {/* Gauge */}
+                <div className="cr-gauge-track">
                   <div
-                    className="h-1.5 rounded-full transition-all duration-500"
-                    style={{ width: `${pct}%`, background: cfg.color }}
+                    className="cr-gauge-fill"
+                    style={{
+                      width: `${pct}%`,
+                      background: isFull
+                        ? 'var(--c-amber)'
+                        : gaugeColor(cfg.color),
+                      boxShadow: `0 0 6px ${gaugeColor(cfg.color)}55`,
+                    }}
                   />
                 </div>
-                <div className="text-right text-xs">
+
+                {/* Rate */}
+                <div className="flex justify-between mt-0.5" style={{ fontSize: 9, fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.04em' }}>
+                  <span style={{ color: 'var(--c-dim)' }}>{pct.toFixed(0)}%</span>
                   {rate > 0
-                    ? <span className="text-green-400">+{rate.toFixed(1)}/s</span>
+                    ? <span style={{ color: 'var(--c-green)' }}>+{rate.toFixed(1)}/s</span>
                     : rate < 0
-                    ? <span className="text-red-400">{rate.toFixed(1)}/s</span>
-                    : <span className="text-slate-500">0/s</span>
+                    ? <span style={{ color: 'var(--c-red)' }}>{rate.toFixed(1)}/s</span>
+                    : <span style={{ color: 'var(--c-dim)' }}>IDLE</span>
                   }
                 </div>
               </div>
@@ -77,28 +111,40 @@ export function LeftSidebar() {
         </div>
       </section>
 
-      {/* Manual mining */}
-      <section className="p-4 border-b border-slate-700">
-        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">⛏️ Manual Mining</h2>
-        <div className="space-y-2">
-          {mineBtn('ironOre',   'Iron',   '🪨', 'hover:bg-blue-700')}
-          {mineBtn('copperOre', 'Copper', '🟠', 'hover:bg-orange-700')}
-          {mineBtn('coal',      'Coal',   '⬛', 'hover:bg-gray-600')}
+      {/* ── Manual mining ── */}
+      <section className="p-4" style={{ borderBottom: '1px solid var(--c-border)' }}>
+        <div className="cr-label mb-3">⛏ Manual Extract</div>
+        <div className="flex flex-col gap-2">
+          <MineButton resource="ironOre"   label="Iron"   icon="🪨" />
+          <MineButton resource="copperOre" label="Copper" icon="🟠" />
+          <MineButton resource="coal"      label="Coal"   icon="⬛" />
         </div>
       </section>
 
-      {/* Production rates summary */}
+      {/* ── Net production summary ── */}
       <section className="p-4">
-        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">📊 Production/sec</h2>
-        <div className="space-y-1 text-sm">
+        <div className="cr-label mb-3">⚡ Net Output/s</div>
+        <div className="flex flex-col gap-1">
           {RESOURCE_KEYS.filter(k => (productionRates[k] ?? 0) !== 0).length === 0
-            ? <p className="text-slate-600 italic">No active buildings</p>
+            ? (
+              <span style={{ color: 'var(--c-dim)', fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontStyle: 'italic' }}>
+                — no active buildings —
+              </span>
+            )
             : RESOURCE_KEYS.filter(k => (productionRates[k] ?? 0) !== 0).map(key => {
                 const rate = productionRates[key] ?? 0
                 return (
-                  <div key={key} className="flex justify-between">
-                    <span>{RESOURCES[key].icon} {RESOURCES[key].label}</span>
-                    <span className={`font-mono ${rate > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  <div key={key} className="cr-ticker-row" style={{ padding: '4px 8px' }}>
+                    <span style={{ color: 'var(--c-text)', fontSize: 11 }}>
+                      {RESOURCES[key].icon} {RESOURCES[key].label}
+                    </span>
+                    <span
+                      className="cr-value"
+                      style={{
+                        fontSize: 11,
+                        color: rate > 0 ? 'var(--c-green)' : 'var(--c-red)',
+                      }}
+                    >
                       {rate > 0 ? '+' : ''}{rate.toFixed(1)}
                     </span>
                   </div>

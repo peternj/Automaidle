@@ -9,12 +9,12 @@ function fmt(n: number): string {
 }
 
 export function Header() {
-  const tick        = useGameStore(s => s.tick)
-  const coins       = useGameStore(s => s.coins)
-  const saveToCloud = useGameStore(s => s.saveToCloud)
+  const tick          = useGameStore(s => s.tick)
+  const coins         = useGameStore(s => s.coins)
+  const saveToCloud   = useGameStore(s => s.saveToCloud)
   const loadFromCloud = useGameStore(s => s.loadFromCloud)
-  const resetGame   = useGameStore(s => s.resetGame)
-  const navigate    = useNavigate()
+  const resetGame     = useGameStore(s => s.resetGame)
+  const navigate      = useNavigate()
 
   async function handleSignOut() {
     await supabase.auth.signOut()
@@ -25,47 +25,97 @@ export function Header() {
     if (window.confirm('Are you sure? All progress will be lost.')) resetGame()
   }
 
+  const mins   = Math.floor(tick / 60)
+  const secs   = tick % 60
+  const runTxt = mins > 0 ? `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}` : `00:${String(secs).padStart(2, '0')}`
+
   return (
-    <header className="bg-slate-900 border-b border-slate-700 px-6 py-3 flex items-center justify-between sticky top-0 z-40">
-      <div className="flex items-center gap-3">
-        <span className="text-2xl">⚙️</span>
+    <header
+      className="sticky top-0 z-40 flex items-center justify-between px-5 py-2 gap-6"
+      style={{
+        background: 'var(--c-panel)',
+        borderBottom: '1px solid var(--c-border)',
+        boxShadow: '0 2px 20px rgba(0,0,0,0.6)',
+      }}
+    >
+      {/* ── Brand ── */}
+      <div className="flex items-center gap-3 shrink-0">
+        {/* System online LED */}
+        <div className="cr-led cr-led-green" />
         <div>
-          <h1 className="text-lg font-bold text-white">Industrial Empire</h1>
-          <p className="text-xs text-slate-400">v0.2 — React + Supabase</p>
+          <div
+            className="font-bold tracking-widest uppercase text-sm"
+            style={{ color: 'var(--c-bright)', fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.18em' }}
+          >
+            Industrial Empire
+          </div>
+          <div className="cr-label" style={{ marginTop: 1 }}>Control Room v0.2</div>
         </div>
       </div>
 
-      <div className="flex items-center gap-5">
-        {/* Tick indicator */}
-        <div className="flex items-center gap-2 text-sm text-slate-400">
-          <span className="animate-tick-flash w-2 h-2 bg-green-400 rounded-full inline-block" />
-          <span className="font-mono">Tick {tick}</span>
+      {/* ── Centre: tick clock ── */}
+      <div className="flex-1 flex justify-center">
+        <div
+          className="flex items-center gap-3 px-5 py-1.5 rounded"
+          style={{ background: 'var(--c-surface)', border: '1px solid var(--c-border)' }}
+        >
+          <div className="cr-led cr-led-cyan" />
+          <div className="text-center">
+            <div
+              className="cr-value animate-tick-flash"
+              style={{ fontSize: 22, lineHeight: 1, letterSpacing: '0.06em' }}
+            >
+              {runTxt}
+            </div>
+            <div className="cr-label" style={{ justifyContent: 'center', marginTop: 2 }}>
+              TICK&nbsp;{fmt(tick)}
+            </div>
+          </div>
+          <div className="cr-led cr-led-cyan" />
+        </div>
+      </div>
+
+      {/* ── Right: coins + actions ── */}
+      <div className="flex items-center gap-3 shrink-0">
+
+        {/* Coin readout */}
+        <div
+          className="flex items-center gap-2 px-4 py-1.5 rounded"
+          style={{
+            background: 'rgba(255,170,0,0.07)',
+            border: '1px solid var(--c-border-am)',
+          }}
+        >
+          <span style={{ fontSize: 16 }}>🪙</span>
+          <span
+            className="cr-value"
+            style={{ color: 'var(--c-amber)', fontSize: 18, fontWeight: 700 }}
+          >
+            {fmt(coins)}
+          </span>
+          <span className="cr-label" style={{ letterSpacing: '0.12em' }}>COINS</span>
         </div>
 
-        {/* Coins */}
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-4 py-1.5 flex items-center gap-2">
-          <span className="text-amber-400 text-lg">🪙</span>
-          <span className="font-mono font-bold text-amber-300 text-lg">{fmt(coins)}</span>
-        </div>
-
-        {/* Actions */}
-        <div className="flex gap-2">
-          <button
-            onClick={() => saveToCloud()}
-            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-sm rounded-lg transition-colors"
-          >💾 Save</button>
-          <button
-            onClick={() => loadFromCloud()}
-            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-sm rounded-lg transition-colors"
-          >📂 Load</button>
+        {/* Action buttons */}
+        <div className="flex gap-1.5">
+          <button onClick={() => saveToCloud()} className="cr-btn cr-btn-cyan">
+            ⬆ SAVE
+          </button>
+          <button onClick={() => loadFromCloud()} className="cr-btn cr-btn-cyan">
+            ⬇ LOAD
+          </button>
           <button
             onClick={handleReset}
-            className="px-3 py-1.5 bg-red-900/50 hover:bg-red-800/60 text-sm rounded-lg transition-colors text-red-300"
-          >🔄 Reset</button>
+            className="cr-btn cr-btn-amber"
+          >
+            ↺ RESET
+          </button>
           <button
             onClick={handleSignOut}
-            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-sm rounded-lg transition-colors text-slate-300"
-          >↩ Sign out</button>
+            className="cr-btn cr-btn-dim"
+          >
+            ⏻ SIGN OUT
+          </button>
         </div>
       </div>
     </header>

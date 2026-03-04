@@ -6,78 +6,156 @@ import type { BuildingKey } from '../../engine/types'
 function fmt(n: number) { return n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : Math.floor(n).toString() }
 
 export function BuildingsTab() {
-  const state       = useGameStore(s => s)
-  const buyBuilding = useGameStore(s => s.buyBuilding)
+  const state           = useGameStore(s => s)
+  const buyBuilding     = useGameStore(s => s.buyBuilding)
+  const starvedBuildings = useGameStore(s => s.starvedBuildings)
 
   const totalBuildings = Object.values(state.buildings).reduce((a, b) => a + b, 0)
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
       {BUILDING_KEYS.map(key => {
-        const cfg     = BUILDINGS[key]
-        const count   = state.buildings[key] ?? 0
-        const locked  = totalBuildings < cfg.unlockAt && count === 0
-        const atMax   = count >= cfg.maxCount
+        const cfg      = BUILDINGS[key]
+        const count    = state.buildings[key] ?? 0
+        const locked   = totalBuildings < cfg.unlockAt && count === 0
+        const atMax    = count >= cfg.maxCount
         const isActive = count > 0
+        const missingResources = isActive ? (starvedBuildings[key] ?? []) : []
+        const isStarved = missingResources.length > 0
 
         const { cost, canAfford } = computeBuildingCost(state, key)
 
-        const prodStr = Object.entries(cfg.production).map(([r, a]) =>
-          <span key={r} className="text-green-400">+{a} {RESOURCES[r as keyof typeof RESOURCES]?.icon}</span>
-        )
-        const consStr = Object.entries(cfg.consumption).map(([r, a]) =>
-          <span key={r} className="text-red-400">−{a} {RESOURCES[r as keyof typeof RESOURCES]?.icon}</span>
-        )
+        const stationClass = locked
+          ? 'cr-station cr-station-inactive'
+          : isStarved
+          ? 'cr-station cr-station-starved'
+          : isActive
+          ? 'cr-station cr-station-active'
+          : 'cr-station cr-station-inactive'
 
         return (
           <div
             key={key}
-            className={`bg-slate-800 border rounded-2xl p-4 flex flex-col gap-3 transition-all
-              ${isActive ? 'border-blue-500/40 animate-pulse-glow' : 'border-slate-700'}
-              ${locked ? 'opacity-40' : ''}
-            `}
+            className={stationClass}
+            style={{ opacity: locked ? 0.45 : 1 }}
           >
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <span className="text-3xl">{cfg.icon}</span>
+            {/* ── Header row ── */}
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                {/* Status LED */}
+                <span
+                  className={`cr-led ${
+                    locked     ? 'cr-led-dim'
+                    : isStarved ? 'cr-led-amber'
+                    : isActive  ? 'cr-led-green'
+                    :             'cr-led-dim'
+                  }`}
+                  style={{ marginTop: 2 }}
+                />
+
+                <span style={{ fontSize: 24 }}>{cfg.icon}</span>
+
                 <div>
-                  <div className="font-semibold text-white">{cfg.label}</div>
-                  <div className="text-xs text-slate-400 mt-0.5">{cfg.desc}</div>
+                  <div
+                    style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: 'var(--c-bright)',
+                      letterSpacing: '0.04em',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    {cfg.label}
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--c-dim)', marginTop: 1 }}>
+                    {cfg.desc}
+                  </div>
                 </div>
               </div>
-              <div className={`bg-slate-700 rounded-full px-3 py-1 font-mono text-sm font-bold ${isActive ? 'text-blue-300' : 'text-slate-400'}`}>
+
+              {/* Count badge */}
+              <div
+                className="cr-value shrink-0"
+                style={{
+                  fontSize: 13,
+                  color: isStarved ? 'var(--c-amber)' : isActive ? 'var(--c-cyan)' : 'var(--c-dim)',
+                  background: 'var(--c-bg)',
+                  border: '1px solid var(--c-border)',
+                  borderRadius: 4,
+                  padding: '2px 8px',
+                }}
+              >
                 {count}/{cfg.maxCount}
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2 text-xs">
-              {prodStr}
-              {consStr.length > 0 && <span className="text-slate-600">|</span>}
-              {consStr}
+            {/* ── Starvation warning ── */}
+            {isStarved && (
+              <div
+                style={{
+                  background: 'rgba(255,170,0,0.08)',
+                  border: '1px solid rgba(255,170,0,0.35)',
+                  borderRadius: 4,
+                  padding: '4px 8px',
+                  fontSize: 10,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  color: 'var(--c-amber)',
+                  letterSpacing: '0.06em',
+                }}
+                title={`Missing: ${missingResources.map(r => RESOURCES[r as keyof typeof RESOURCES]?.label ?? r).join(', ')}`}
+              >
+                ⚠ STARVED — NO {missingResources.map(r => RESOURCES[r as keyof typeof RESOURCES]?.icon ?? r).join(' ')}
+              </div>
+            )}
+
+            {/* ── I/O rates ── */}
+            <div className="flex flex-wrap gap-2" style={{ fontSize: 10 }}>
+              {Object.entries(cfg.production).map(([r, a]) => (
+                <span key={r} style={{ color: 'var(--c-green)', fontFamily: "'JetBrains Mono', monospace" }}>
+                  +{a} {RESOURCES[r as keyof typeof RESOURCES]?.icon}
+                </span>
+              ))}
+              {Object.entries(cfg.consumption).length > 0 && (
+                <span style={{ color: 'var(--c-border-hi)' }}>│</span>
+              )}
+              {Object.entries(cfg.consumption).map(([r, a]) => (
+                <span key={r} style={{ color: 'var(--c-red)', fontFamily: "'JetBrains Mono', monospace" }}>
+                  −{a} {RESOURCES[r as keyof typeof RESOURCES]?.icon}
+                </span>
+              ))}
             </div>
 
-            <div className="flex items-center justify-between">
-              <div className="flex flex-wrap gap-1.5 text-xs">
+            {/* ── Cost + buy ── */}
+            <div className="flex items-center justify-between gap-2">
+              {/* Cost readout */}
+              <div className="flex flex-wrap gap-2" style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>
                 {Object.entries(cost).map(([res, amt]) => {
-                  const have = res === 'coins' ? state.coins : (state.resources[res as keyof typeof state.resources] ?? 0)
-                  const icon = res === 'coins' ? '🪙' : RESOURCES[res as keyof typeof RESOURCES]?.icon ?? '?'
+                  const have = res === 'coins'
+                    ? state.coins
+                    : (state.resources[res as keyof typeof state.resources] ?? 0)
+                  const icon = res === 'coins'
+                    ? '🪙'
+                    : RESOURCES[res as keyof typeof RESOURCES]?.icon ?? '?'
                   return (
-                    <span key={res} className={have >= amt ? 'text-green-400' : 'text-red-400'}>
-                      {icon}{fmt(amt)}
+                    <span key={res} style={{ color: have >= amt ? 'var(--c-green)' : 'var(--c-red)' }}>
+                      {icon} {fmt(amt)}
                     </span>
                   )
                 })}
               </div>
+
+              {/* Buy button */}
               <button
                 onClick={() => buyBuilding(key as BuildingKey)}
                 disabled={locked || atMax || !canAfford}
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition-all
-                  ${locked || atMax  ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                  : !canAfford       ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                  :                    'bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white'}
-                `}
+                className={`cr-btn shrink-0 ${
+                  locked || atMax  ? 'cr-btn-dim'
+                  : !canAfford     ? 'cr-btn-dim'
+                  :                  'cr-btn-green'
+                }`}
               >
-                {locked ? '🔒 Locked' : atMax ? '✅ Max' : '+ Buy'}
+                {locked ? '🔒 LOCKED' : atMax ? '✓ MAX' : '+ BUY'}
               </button>
             </div>
           </div>

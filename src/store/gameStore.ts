@@ -27,16 +27,29 @@ export const useGameStore = create<GameStore>()(
     immer((set, get) => ({
       // ── Initial state ──────────────────────────────────────────────────────
       ...createInitialState(),
-      productionRates: {},
+      productionRates:  {},
+      starvedBuildings: {},
       logBuffer: [],
       notifications: [],
 
       // ── Core tick update ───────────────────────────────────────────────────
       update() {
-        const { nextState, productionRates } = update(get())
+        const { nextState, productionRates, starvedBuildings } = update(get())
+
+        // Log once when a building first becomes starved, listing the missing resources
+        const prevStarved = get().starvedBuildings
+        Object.entries(starvedBuildings).forEach(([key, missing]) => {
+          if (missing && missing.length > 0 && !prevStarved[key as BuildingKey]) {
+            const label       = BUILDINGS[key as BuildingKey]?.label ?? key
+            const missingList = missing.map(r => RESOURCES[r]?.label ?? r).join(', ')
+            get().addLog(`⚠️ ${label} is starved — missing: ${missingList}`)
+          }
+        })
+
         set(state => {
           Object.assign(state, nextState)
-          state.productionRates = productionRates
+          state.productionRates  = productionRates
+          state.starvedBuildings = starvedBuildings
         })
       },
 

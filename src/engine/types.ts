@@ -92,9 +92,10 @@ export interface Notification {
 
 export interface GameStore extends GameState {
   // Derived (computed per tick, not persisted)
-  productionRates: Partial<Record<ResourceKey, number>>
-  logBuffer:       string[]
-  notifications:   Notification[]
+  productionRates:  Partial<Record<ResourceKey, number>>
+  starvedBuildings: Partial<Record<BuildingKey, ResourceKey[]>>  // missing resource keys per building
+  logBuffer:        string[]
+  notifications:    Notification[]
 
   // Game actions
   update:       () => void

@@ -32,14 +32,14 @@ export const BUILDINGS: Record<BuildingKey, BuildingConfig> = {
     label: 'Automated Miner', icon: '⛏️',
     desc: 'Mines 2 Iron Ore per tick automatically.',
     baseCost: { coins: 50 }, costMultiplier: 1.35,
-    production: { ironOre: 2 }, consumption: { coal: 0.5 },
+    production: { ironOre: 2 }, consumption: {},
     maxCount: 20, unlockAt: 0,
   },
   copperMiner: {
     label: 'Copper Miner', icon: '🔶',
     desc: 'Mines 2 Copper Ore per tick.',
     baseCost: { coins: 75 }, costMultiplier: 1.35,
-    production: { copperOre: 2 }, consumption: { coal: 0.5 },
+    production: { copperOre: 2 }, consumption: {},
     maxCount: 20, unlockAt: 0,
   },
   coalMine: {

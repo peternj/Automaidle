@@ -8,7 +8,7 @@ import {
   RESOURCE_KEYS, BUILDING_KEYS,
   CHART_HISTORY, MARKET_HISTORY,
 } from './config'
-import type { GameState, Resources, ResourceKey } from './types'
+import type { GameState, Resources, ResourceKey, BuildingKey } from './types'
 
 // ── Initial state factory ────────────────────────────────────────────────────
 
@@ -47,8 +47,9 @@ export function createInitialState(): GameState {
 // ── Result type ──────────────────────────────────────────────────────────────
 
 export interface UpdateResult {
-  nextState:       GameState
-  productionRates: Partial<Record<ResourceKey, number>>
+  nextState:        GameState
+  productionRates:  Partial<Record<ResourceKey, number>>
+  starvedBuildings: Partial<Record<BuildingKey, ResourceKey[]>>  // missing resource keys per building
 }
 
 // ── Main update ──────────────────────────────────────────────────────────────
@@ -65,6 +66,8 @@ export function update(state: GameState): UpdateResult {
   const productionRates: Partial<Record<ResourceKey, number>> = {}
   RESOURCE_KEYS.forEach(r => { productionRates[r] = 0 })
 
+  const starvedBuildings: Partial<Record<BuildingKey, ResourceKey[]>> = {}
+
   const speedMult  = state.upgrades.overclock        ? UPGRADES.overclock.value        : 1
   const smelterEff = state.upgrades.efficientFurnace ? UPGRADES.efficientFurnace.value : 1
 
@@ -73,14 +76,17 @@ export function update(state: GameState): UpdateResult {
     if (count === 0) continue
     const cfg = BUILDINGS[bKey]
 
-    // Check resource availability
-    let canRun = true
+    // Check resource availability — collect all missing resources
+    const missing: ResourceKey[] = []
     for (const [res, amt] of Object.entries(cfg.consumption) as [ResourceKey, number][]) {
       const isSmelterCoal = res === 'coal' && bKey.toLowerCase().includes('smelter')
       const adjusted = isSmelterCoal ? amt * smelterEff : amt
-      if ((resources[res] ?? 0) < adjusted * count) { canRun = false; break }
+      if ((resources[res] ?? 0) < adjusted * count) missing.push(res)
     }
-    if (!canRun) continue
+    if (missing.length > 0) {
+      starvedBuildings[bKey] = missing
+      continue
+    }
 
     // Consume
     for (const [res, amt] of Object.entries(cfg.consumption) as [ResourceKey, number][]) {
@@ -124,7 +130,7 @@ export function update(state: GameState): UpdateResult {
     chartData,
   }
 
-  return { nextState, productionRates }
+  return { nextState, productionRates, starvedBuildings }
 }
 
 // ── Market fluctuation ───────────────────────────────────────────────────────
