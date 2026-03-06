@@ -6,10 +6,17 @@ import {
   createInitialState, update, computeSell, computeBuildingCost,
 } from '../engine/GameEngine'
 import {
-  RESOURCES, BUILDINGS, UPGRADES, SAVE_KEY, MAX_LOG_ENTRIES,
+  RESOURCES, BUILDINGS, UPGRADES, SAVE_KEY, MAX_LOG_ENTRIES, RESOURCE_KEYS,
 } from '../engine/config'
 import { supabase } from '../lib/supabase'
-import type { GameStore, ResourceKey, BuildingKey, UpgradeKey, Notification } from '../engine/types'
+import type { GameStore, ResourceKey, BuildingKey, UpgradeKey, Notification, AutoSellConfig } from '../engine/types'
+
+// Default auto-sell config — disabled, keep 0 (sell everything)
+function defaultAutoSell(): Record<ResourceKey, AutoSellConfig> {
+  return Object.fromEntries(
+    RESOURCE_KEYS.map(k => [k, { enabled: false, keepAmount: 0 }])
+  ) as Record<ResourceKey, AutoSellConfig>
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Zustand store — thin wrapper over pure GameEngine
@@ -31,6 +38,7 @@ export const useGameStore = create<GameStore>()(
       starvedBuildings: {},
       logBuffer: [],
       notifications: [],
+      autoSell: defaultAutoSell(),
 
       // ── Core tick update ───────────────────────────────────────────────────
       update() {
@@ -50,13 +58,41 @@ export const useGameStore = create<GameStore>()(
           Object.assign(state, nextState)
           state.productionRates  = productionRates
           state.starvedBuildings = starvedBuildings
+
+          // ── Auto-sell pass (runs after production) ──────────────────────
+          let autoEarned = 0
+          for (const res of RESOURCE_KEYS) {
+            const cfg = state.autoSell[res]
+            if (!cfg?.enabled) continue
+            const current = state.resources[res] ?? 0
+            const toSell  = Math.floor(Math.max(0, current - cfg.keepAmount))
+            if (toSell <= 0) continue
+            const price  = state.marketPrices[res]
+            const earned = Math.round(toSell * price)
+            state.resources[res]                 -= toSell
+            state.coins                          += earned
+            state.stats.totalSold[res]            = (state.stats.totalSold[res] ?? 0) + toSell
+            state.stats.coinsEarned              += earned
+            autoEarned                           += earned
+          }
+          // Log a single summary line per tick instead of per-resource spam
+          if (autoEarned > 0) {
+            const tick = String(state.tick).padStart(4, '0')
+            state.logBuffer.push(`[${tick}] 🤖 Auto-sold for +${fmtNum(autoEarned)} 🪙`)
+            if (state.logBuffer.length > MAX_LOG_ENTRIES * 2) {
+              state.logBuffer = state.logBuffer.slice(-MAX_LOG_ENTRIES)
+            }
+          }
         })
       },
 
       // ── Manual mine ────────────────────────────────────────────────────────
       manualMine(resource: ResourceKey) {
         set(state => {
-          const mult  = state.upgrades.betterPickaxe ? UPGRADES.betterPickaxe.value : 1
+          // improvedDrill replaces betterPickaxe at a higher value; they don't stack
+          const mult =
+            state.upgrades.improvedDrill  ? UPGRADES.improvedDrill.value  :
+            state.upgrades.betterPickaxe  ? UPGRADES.betterPickaxe.value  : 1
           const cap   = RESOURCES[resource].cap
           const added = Math.min(mult, cap - (state.resources[resource] ?? 0))
           state.resources[resource] = Math.min(cap, (state.resources[resource] ?? 0) + added)
@@ -143,6 +179,13 @@ export const useGameStore = create<GameStore>()(
         get().addNotif(`+${fmtNum(result.earned)} 🪙`, 'success')
       },
 
+      // ── Auto-sell config ───────────────────────────────────────────────────
+      setAutoSell(resource: ResourceKey, patch: Partial<AutoSellConfig>) {
+        set(state => {
+          state.autoSell[resource] = { ...state.autoSell[resource], ...patch }
+        })
+      },
+
       // ── Market price update (from Supabase Realtime) ───────────────────────
       setMarketPrice(resource: ResourceKey, price: number) {
         set(state => { state.marketPrices[resource] = price })
@@ -208,7 +251,7 @@ export const useGameStore = create<GameStore>()(
 
       // ── Reset ──────────────────────────────────────────────────────────────
       resetGame() {
-        set(() => ({ ...createInitialState(), productionRates: {}, logBuffer: [], notifications: [] }))
+        set(() => ({ ...createInitialState(), productionRates: {}, logBuffer: [], notifications: [], autoSell: defaultAutoSell() }))
         localStorage.removeItem(SAVE_KEY)
         get().addLog('🔄 New game started!')
         get().addNotif('🔄 Game reset', 'info')
@@ -241,7 +284,7 @@ export const useGameStore = create<GameStore>()(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-type SetFn = Parameters<Parameters<typeof create>[0]>[0]
+type SetFn = (fn: (state: GameStore) => void) => void
 
 function buildSavePayload(state: GameStore) {
   return {
@@ -254,12 +297,14 @@ function buildSavePayload(state: GameStore) {
     marketPrices: state.marketPrices,
     priceHistory: state.priceHistory,
     chartData:    state.chartData,
+    autoSell:     state.autoSell,
     savedAt:      Date.now(),
   }
 }
 
 function applyLoadedState(set: SetFn, data: ReturnType<typeof buildSavePayload>) {
-  const fresh = createInitialState()
+  const fresh         = createInitialState()
+  const freshAutoSell = defaultAutoSell()
   set((state: GameStore) => {
     state.tick         = data.tick         ?? fresh.tick
     state.resources    = { ...fresh.resources,    ...data.resources }
@@ -270,5 +315,7 @@ function applyLoadedState(set: SetFn, data: ReturnType<typeof buildSavePayload>)
     state.marketPrices = { ...fresh.marketPrices, ...data.marketPrices }
     state.priceHistory = { ...fresh.priceHistory, ...data.priceHistory }
     state.chartData    = data.chartData ?? fresh.chartData
+    // Merge saved auto-sell config over defaults (handles saves without autoSell)
+    state.autoSell     = { ...freshAutoSell, ...(data.autoSell ?? {}) }
   })
 }

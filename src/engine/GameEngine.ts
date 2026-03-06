@@ -1,11 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  GameEngine — pure functions, zero side effects
-//  update(state) → { nextState, productionRates }
+//  update(state) → { nextState, productionRates, starvedBuildings }
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
   RESOURCES, BUILDINGS, MARKET, UPGRADES,
-  RESOURCE_KEYS, BUILDING_KEYS,
+  RESOURCE_KEYS, BUILDING_KEYS, FACTORY_BUILDING_KEYS,
   CHART_HISTORY, MARKET_HISTORY,
 } from './config'
 import type { GameState, Resources, ResourceKey, BuildingKey } from './types'
@@ -24,18 +24,33 @@ export function createInitialState(): GameState {
   return {
     tick: 0,
     resources: {
+      // Tier 1 — starting resources
       ironOre: 10, copperOre: 5, coal: 15,
       ironPlate: 0, copperWire: 0, gear: 0, circuit: 0,
+      // Tier 2
+      steel: 0, processor: 0,
+      // Tier 3
+      robot: 0,
     },
     coins: 100,
     buildings: {
       automatedMiner: 0, copperMiner: 0, coalMine: 0,
       ironSmelter: 0, copperSmelter: 0,
       gearFactory: 0, circuitFactory: 0,
+      // Tier 2
+      steelFoundry: 0, processorPlant: 0,
+      // Tier 3
+      roboticsLab: 0,
     },
     upgrades: {
+      // Tier 1
       betterPickaxe: false, efficientFurnace: false,
       bulkSale: false, overclock: false,
+      // Tier 2
+      improvedDrill: false, heatRecovery: false,
+      bulkSale2: false, overclock2: false,
+      // Tier 3
+      massProduction: false, aiOptimization: false,
     },
     stats: { totalProduced: {}, totalSold: {}, coinsEarned: 0, manualClicks: 0 },
     marketPrices,
@@ -49,13 +64,12 @@ export function createInitialState(): GameState {
 export interface UpdateResult {
   nextState:        GameState
   productionRates:  Partial<Record<ResourceKey, number>>
-  starvedBuildings: Partial<Record<BuildingKey, ResourceKey[]>>  // missing resource keys per building
+  starvedBuildings: Partial<Record<BuildingKey, ResourceKey[]>>
 }
 
 // ── Main update ──────────────────────────────────────────────────────────────
 
 export function update(state: GameState): UpdateResult {
-  // Work on a shallow copy — resources mutated in place below
   const resources = { ...state.resources }
   const stats     = {
     ...state.stats,
@@ -68,15 +82,30 @@ export function update(state: GameState): UpdateResult {
 
   const starvedBuildings: Partial<Record<BuildingKey, ResourceKey[]>> = {}
 
-  const speedMult  = state.upgrades.overclock        ? UPGRADES.overclock.value        : 1
-  const smelterEff = state.upgrades.efficientFurnace ? UPGRADES.efficientFurnace.value : 1
+  // ── Compute stacked upgrade multipliers ──────────────────────────────────
+
+  // Global production speed: overclock × overclock2 × aiOptimization
+  const speedMult =
+    (state.upgrades.overclock       ? UPGRADES.overclock.value       : 1) *
+    (state.upgrades.overclock2      ? UPGRADES.overclock2.value      : 1) *
+    (state.upgrades.aiOptimization  ? UPGRADES.aiOptimization.value  : 1)
+
+  // Smelter coal efficiency: efficientFurnace × heatRecovery (multiplicative reduction)
+  const smelterEff =
+    (state.upgrades.efficientFurnace ? UPGRADES.efficientFurnace.value : 1) *
+    (state.upgrades.heatRecovery     ? UPGRADES.heatRecovery.value     : 1)
+
+  // Factory output boost (gear/circuit/steel/processor/robotics)
+  const factoryBoost = state.upgrades.massProduction ? UPGRADES.massProduction.value : 1
+
+  // ── Building loop ─────────────────────────────────────────────────────────
 
   for (const bKey of BUILDING_KEYS) {
     const count = state.buildings[bKey]
     if (count === 0) continue
     const cfg = BUILDINGS[bKey]
 
-    // Check resource availability — collect all missing resources
+    // Check resource availability — collect all missing
     const missing: ResourceKey[] = []
     for (const [res, amt] of Object.entries(cfg.consumption) as [ResourceKey, number][]) {
       const isSmelterCoal = res === 'coal' && bKey.toLowerCase().includes('smelter')
@@ -88,7 +117,7 @@ export function update(state: GameState): UpdateResult {
       continue
     }
 
-    // Consume
+    // Consume inputs
     for (const [res, amt] of Object.entries(cfg.consumption) as [ResourceKey, number][]) {
       const isSmelterCoal = res === 'coal' && bKey.toLowerCase().includes('smelter')
       const adjusted = isSmelterCoal ? amt * smelterEff : amt
@@ -97,9 +126,13 @@ export function update(state: GameState): UpdateResult {
       productionRates[res] = (productionRates[res] ?? 0) - total
     }
 
-    // Produce
+    // Determine per-building multiplier
+    const isFactory   = FACTORY_BUILDING_KEYS.includes(bKey)
+    const buildingMult = speedMult * (isFactory ? factoryBoost : 1)
+
+    // Produce outputs
     for (const [res, amt] of Object.entries(cfg.production) as [ResourceKey, number][]) {
-      const total  = amt * count * speedMult
+      const total  = amt * count * buildingMult
       const cap    = RESOURCES[res].cap
       const actual = Math.min(total, cap - (resources[res] ?? 0))
       resources[res] = Math.min(cap, (resources[res] ?? 0) + actual)
@@ -143,9 +176,12 @@ function fluctuateMarket(
   const newHistory = {} as GameState['priceHistory']
 
   for (const res of RESOURCE_KEYS) {
-    const { volatility } = MARKET[res]
+    const { volatility, basePrice } = MARKET[res]
     const change   = (Math.random() * 2 - 1) * volatility
-    const newPrice = Math.max(1, Math.round(prices[res] * (1 + change)))
+    // Price mean-reverts toward base to prevent runaway inflation/deflation
+    const current  = prices[res]
+    const drift    = (basePrice - current) * 0.02
+    const newPrice = Math.max(1, Math.round(current * (1 + change) + drift))
     newPrices[res] = newPrice
 
     const hist = [...(history[res] ?? []), newPrice]
@@ -192,7 +228,11 @@ export function computeSell(
   resource: ResourceKey,
   amount: number,
 ): SellResult {
-  const mult   = state.upgrades.bulkSale ? UPGRADES.bulkSale.value : 1
+  // bulkSale2 supersedes bulkSale — take the highest active multiplier
+  const mult =
+    state.upgrades.bulkSale2 ? UPGRADES.bulkSale2.value :
+    state.upgrades.bulkSale  ? UPGRADES.bulkSale.value  : 1
+
   const toSell = Math.min(amount * mult, state.resources[resource] ?? 0)
   if (toSell <= 0) return { sold: 0, earned: 0, ok: false }
   const earned = Math.round(toSell * state.marketPrices[resource])

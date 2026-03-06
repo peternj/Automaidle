@@ -5,14 +5,34 @@
 export type ResourceKey =
   | 'ironOre' | 'copperOre' | 'coal'
   | 'ironPlate' | 'copperWire' | 'gear' | 'circuit'
+  // Tier 2
+  | 'steel' | 'processor'
+  // Tier 3
+  | 'robot'
 
 export type BuildingKey =
   | 'automatedMiner' | 'copperMiner' | 'coalMine'
   | 'ironSmelter' | 'copperSmelter'
   | 'gearFactory' | 'circuitFactory'
+  // Tier 2
+  | 'steelFoundry' | 'processorPlant'
+  // Tier 3
+  | 'roboticsLab'
 
 export type UpgradeKey =
-  | 'betterPickaxe' | 'efficientFurnace' | 'bulkSale' | 'overclock'
+  // Tier 1 — early
+  | 'betterPickaxe'       // +2× manual yield
+  | 'efficientFurnace'    // smelters use 25% less coal
+  | 'bulkSale'            // sell ×5
+  | 'overclock'           // all production ×1.5
+  // Tier 2 — mid
+  | 'improvedDrill'       // +4× manual yield (replaces betterPickaxe)
+  | 'heatRecovery'        // smelters use 50% less coal (stacks)
+  | 'bulkSale2'           // sell ×25 (replaces bulkSale)
+  | 'overclock2'          // all production ×2 (stacks with overclock)
+  // Tier 3 — late
+  | 'massProduction'      // factories produce ×2
+  | 'aiOptimization'      // all buildings ×3 (prestige)
 
 // ── Config shapes ────────────────────────────────────────────────────────────
 
@@ -45,15 +65,16 @@ export interface UpgradeConfig {
   icon: string
   desc: string
   cost: Partial<Record<ResourceKey | 'coins', number>>
-  effect: 'manualYield' | 'smelterEfficiency' | 'sellMultiplier' | 'productionSpeed'
+  effect: string    // descriptive tag; engine reads by key name
   value: number
+  tier: 1 | 2 | 3
 }
 
 // ── Runtime state ────────────────────────────────────────────────────────────
 
-export type Resources  = Record<ResourceKey, number>
-export type Buildings  = Record<BuildingKey, number>
-export type Upgrades   = Record<UpgradeKey, boolean>
+export type Resources    = Record<ResourceKey, number>
+export type Buildings    = Record<BuildingKey, number>
+export type Upgrades     = Record<UpgradeKey, boolean>
 export type MarketPrices = Record<ResourceKey, number>
 export type PriceHistory = Record<ResourceKey, number[]>
 
@@ -65,9 +86,9 @@ export interface GameStats {
 }
 
 export interface ChartData {
-  tickLabels:      number[]                            // tick number for x-axis
-  resourceHistory: Partial<Record<ResourceKey, number>>[]  // snapshot per tick
-  coinHistory:     number[]                            // coin balance per tick
+  tickLabels:      number[]
+  resourceHistory: Partial<Record<ResourceKey, number>>[]
+  coinHistory:     number[]
 }
 
 export interface GameState {
@@ -82,6 +103,13 @@ export interface GameState {
   chartData:    ChartData
 }
 
+// ── Auto-sell config ─────────────────────────────────────────────────────────
+
+export interface AutoSellConfig {
+  enabled:     boolean
+  keepAmount:  number   // keep at least this many units; sell the rest each tick
+}
+
 // ── Zustand store shape ──────────────────────────────────────────────────────
 
 export interface Notification {
@@ -93,9 +121,12 @@ export interface Notification {
 export interface GameStore extends GameState {
   // Derived (computed per tick, not persisted)
   productionRates:  Partial<Record<ResourceKey, number>>
-  starvedBuildings: Partial<Record<BuildingKey, ResourceKey[]>>  // missing resource keys per building
+  starvedBuildings: Partial<Record<BuildingKey, ResourceKey[]>>
   logBuffer:        string[]
   notifications:    Notification[]
+
+  // Auto-sell configuration (persisted separately in save payload)
+  autoSell: Record<ResourceKey, AutoSellConfig>
 
   // Game actions
   update:       () => void
@@ -103,6 +134,9 @@ export interface GameStore extends GameState {
   buyBuilding:  (key: BuildingKey) => void
   buyUpgrade:   (key: UpgradeKey) => void
   sell:         (resource: ResourceKey, amount: number) => void
+
+  // Auto-sell
+  setAutoSell: (resource: ResourceKey, patch: Partial<AutoSellConfig>) => void
 
   // Persistence
   saveToCloud:    () => Promise<void>
