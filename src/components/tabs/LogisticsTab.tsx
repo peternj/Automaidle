@@ -1,101 +1,150 @@
-import { useEffect, useRef } from 'react'
 import { useGameStore } from '../../store/gameStore'
-import { BUILDINGS } from '../../engine/config'
+import { BUILDINGS, BUILDING_KEYS, RESOURCES, RANK_ORDER } from '../../engine/config'
+import type { BuildingKey } from '../../engine/types'
 
-export function LogisticsTab() {
-  const buildings = useGameStore(s => s.buildings)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+// Systems tab — shows process subsystem status as tiles (Dept Manager+)
 
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+function SystemTile({ bKey }: { bKey: BuildingKey }) {
+  const buildings       = useGameStore(s => s.buildings)
+  const starvedBuildings = useGameStore(s => s.starvedBuildings)
+  const productionRates  = useGameStore(s => s.productionRates)
 
-    canvas.width  = canvas.offsetWidth
-    canvas.height = canvas.offsetHeight
-    const W = canvas.width, H = canvas.height
+  const cfg    = BUILDINGS[bKey]
+  const count  = buildings[bKey]
+  const starved = !!starvedBuildings[bKey]
+  const active = count > 0 && !starved
 
-    ctx.clearRect(0, 0, W, H)
-    ctx.fillStyle = '#0f172a'
-    ctx.fillRect(0, 0, W, H)
+  const prodRes  = Object.keys(cfg.production)[0] as (keyof typeof RESOURCES) | undefined
 
-    const activeBuildings = Object.entries(buildings)
-      .filter(([, c]) => c > 0)
-      .map(([key, count]) => ({ key, count, cfg: BUILDINGS[key as keyof typeof BUILDINGS] }))
-
-    if (activeBuildings.length === 0) {
-      ctx.fillStyle = '#475569'
-      ctx.font = '14px Inter, sans-serif'
-      ctx.textAlign = 'center'
-      ctx.fillText('Buy buildings to see the logistics network', W / 2, H / 2)
-      return
-    }
-
-    const cx = W / 2, cy = H / 2
-    const radius = Math.min(W, H) * 0.35
-    const nodes = activeBuildings.map((b, i) => {
-      const angle = (i / activeBuildings.length) * Math.PI * 2 - Math.PI / 2
-      return { ...b, x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius }
-    })
-
-    // Draw edges
-    ctx.lineWidth = 1.5
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        const a = nodes[i], b = nodes[j]
-        const aOut = Object.keys(a.cfg.production)
-        const bIn  = Object.keys(b.cfg.consumption)
-        const bOut = Object.keys(b.cfg.production)
-        const aIn  = Object.keys(a.cfg.consumption)
-        const connected = aOut.some(r => bIn.includes(r)) || bOut.some(r => aIn.includes(r))
-        if (!connected) continue
-        const grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y)
-        grad.addColorStop(0, 'rgba(59,130,246,0.6)')
-        grad.addColorStop(1, 'rgba(6,182,212,0.6)')
-        ctx.strokeStyle = grad
-        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()
-      }
-    }
-
-    // Draw nodes
-    nodes.forEach(node => {
-      // Glow
-      const grd = ctx.createRadialGradient(node.x, node.y, 2, node.x, node.y, 28)
-      grd.addColorStop(0, 'rgba(59,130,246,0.25)')
-      grd.addColorStop(1, 'rgba(59,130,246,0)')
-      ctx.fillStyle = grd
-      ctx.beginPath(); ctx.arc(node.x, node.y, 28, 0, Math.PI * 2); ctx.fill()
-
-      // Circle
-      ctx.fillStyle = '#1e293b'; ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 2
-      ctx.beginPath(); ctx.arc(node.x, node.y, 20, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
-
-      // Icon
-      ctx.font = '18px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-      ctx.fillText(node.cfg.icon[0], node.x, node.y)
-
-      // Count badge
-      ctx.fillStyle = '#2563eb'
-      ctx.beginPath(); ctx.arc(node.x + 14, node.y - 14, 9, 0, Math.PI * 2); ctx.fill()
-      ctx.fillStyle = 'white'; ctx.font = 'bold 9px Inter, sans-serif'
-      ctx.fillText(String(node.count), node.x + 14, node.y - 14)
-
-      // Label
-      ctx.fillStyle = '#94a3b8'; ctx.font = '10px Inter, sans-serif'; ctx.textBaseline = 'top'
-      ctx.fillText(node.cfg.label.substring(0, 14), node.x, node.y + 26)
-    })
-  }, [buildings])
+  const statusColor = starved ? 'var(--c-orange)' : active ? 'var(--c-green)' : 'var(--c-dim)'
+  const statusLabel = count === 0 ? 'NOT DEPLOYED' : starved ? 'STARVED' : 'RUNNING'
 
   return (
-    <div className="bg-slate-800 rounded-2xl p-6">
-      <h3 className="text-lg font-semibold mb-1">🔗 Logistics Network</h3>
-      <p className="text-xs text-slate-500 mb-4">Connections appear between buildings that share resources.</p>
-      <canvas
-        ref={canvasRef}
-        className="w-full rounded-xl bg-slate-900"
-        style={{ height: 420 }}
-      />
+    <div
+      style={{
+        background: 'var(--c-surface)',
+        border: `1px solid ${starved ? 'rgba(249,115,22,0.35)' : active ? 'rgba(59,130,246,0.25)' : 'var(--c-border)'}`,
+        borderRadius: 10,
+        padding: '14px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        opacity: count === 0 ? 0.65 : 1,
+      }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span style={{ fontSize: 20, color: prodRes ? RESOURCES[prodRes]?.color : 'var(--c-dim)' }}>
+            {cfg.icon}
+          </span>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-bright)' }}>{cfg.label}</div>
+            <div style={{ fontSize: 8, color: 'var(--c-dim)', fontFamily: 'monospace', letterSpacing: '0.1em' }}>
+              {cfg.unlockAtRank.toUpperCase()}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span style={{ fontSize: 9, fontFamily: 'monospace', color: statusColor, letterSpacing: '0.1em' }}>
+            {statusLabel}
+          </span>
+          <div className={
+            starved ? 'cr-led cr-led-orange'
+            : active ? 'cr-led cr-led-green'
+            : 'cr-led cr-led-dim'
+          } />
+        </div>
+      </div>
+
+      {/* Unit count indicator */}
+      <div className="flex gap-1 flex-wrap">
+        {Array.from({ length: cfg.maxCount }).map((_, i) => (
+          <div
+            key={i}
+            style={{
+              width: 8, height: 8, borderRadius: 1,
+              background: i < count
+                ? (starved ? 'var(--c-orange)' : 'var(--c-green)')
+                : 'rgba(59,130,246,0.08)',
+              border: `1px solid ${i < count ? 'transparent' : 'var(--c-border)'}`,
+            }}
+          />
+        ))}
+        <span style={{ fontSize: 9, color: 'var(--c-dim)', fontFamily: 'monospace', marginLeft: 4 }}>
+          {count}/{cfg.maxCount}
+        </span>
+      </div>
+
+      {/* Flow rates */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+        {/* Produces */}
+        {Object.entries(cfg.production).map(([r, v]) => {
+          const rate = productionRates[r as keyof typeof RESOURCES] ?? 0
+          const pct  = count > 0 ? Math.min(100, Math.abs(rate / (v * count)) * 100) : 0
+          return (
+            <div key={r} style={{ background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: 5, padding: '5px 8px' }}>
+              <div style={{ fontSize: 8, color: 'var(--c-dim)', fontFamily: 'monospace', letterSpacing: '0.08em', marginBottom: 2 }}>
+                OUT — {RESOURCES[r as keyof typeof RESOURCES]?.label ?? r}
+              </div>
+              <div className="cr-gauge-track">
+                <div className="cr-gauge-fill" style={{ width: `${pct}%`, background: 'var(--c-green)' }} />
+              </div>
+              <div style={{ fontSize: 9, color: 'var(--c-green)', fontFamily: 'monospace', marginTop: 2 }}>
+                +{(v * count).toFixed(1)}/s
+              </div>
+            </div>
+          )
+        })}
+
+        {/* Consumes */}
+        {Object.entries(cfg.consumption).map(([r, v]) => {
+          return (
+            <div key={r} style={{ background: 'rgba(249,115,22,0.05)', border: '1px solid rgba(249,115,22,0.15)', borderRadius: 5, padding: '5px 8px' }}>
+              <div style={{ fontSize: 8, color: 'var(--c-dim)', fontFamily: 'monospace', letterSpacing: '0.08em', marginBottom: 2 }}>
+                IN — {RESOURCES[r as keyof typeof RESOURCES]?.label ?? r}
+              </div>
+              <div className="cr-gauge-track">
+                <div className="cr-gauge-fill" style={{ width: count > 0 && !starved ? '90%' : '10%', background: 'var(--c-orange)' }} />
+              </div>
+              <div style={{ fontSize: 9, color: 'var(--c-orange)', fontFamily: 'monospace', marginTop: 2 }}>
+                -{(v * count).toFixed(1)}/s
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Starve detail */}
+      {starved && starvedBuildings[bKey] && (
+        <div style={{
+          background: 'rgba(249,115,22,0.06)', border: '1px solid rgba(249,115,22,0.25)',
+          borderRadius: 5, padding: '5px 8px',
+          fontSize: 9, color: 'var(--c-orange)', fontFamily: 'monospace',
+        }}>
+          ▲ Supply shortage: {starvedBuildings[bKey]!.map(r => RESOURCES[r]?.label ?? r).join(', ')}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function LogisticsTab() {
+  const rankIndex = useGameStore(s => s.rankIndex)
+  const visibleKeys = BUILDING_KEYS.filter(k => RANK_ORDER[BUILDINGS[k].unlockAtRank] <= rankIndex)
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div>
+        <div className="cr-label mb-1">Process Systems — Real-Time Status</div>
+        <div style={{ fontSize: 10, color: 'var(--c-dim)', fontFamily: 'monospace' }}>
+          Monitor valve status, flow rates, and supply line health for each active subsystem
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>
+        {visibleKeys.map(k => <SystemTile key={k} bKey={k} />)}
+      </div>
     </div>
   )
 }

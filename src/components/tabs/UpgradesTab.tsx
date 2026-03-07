@@ -1,145 +1,202 @@
 import { useGameStore } from '../../store/gameStore'
-import { UPGRADES, UPGRADE_KEYS, RESOURCES } from '../../engine/config'
-import type { UpgradeKey } from '../../engine/types'
+import { UPGRADES, UPGRADE_KEYS, RD_NODES, RD_NODE_KEYS, RESOURCES } from '../../engine/config'
+import type { UpgradeKey, RdNodeKey } from '../../engine/types'
 
-function fmt(n: number) { return n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : Math.floor(n).toString() }
+// ── Regular Upgrade Card ───────────────────────────────────────────────────────
 
-const TIER_LABELS: Record<1 | 2 | 3, string> = {
-  1: '— Tier I  ·  Early Game',
-  2: '— Tier II  ·  Mid Game',
-  3: '— Tier III  ·  Late Game',
+function fmt(n: number) {
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
+  return Math.floor(n).toString()
 }
 
-const TIER_COLOR: Record<1 | 2 | 3, string> = {
-  1: 'var(--c-cyan)',
-  2: 'var(--c-green)',
-  3: 'var(--c-amber)',
-}
-
-export function UpgradesTab() {
-  const upgrades   = useGameStore(s => s.upgrades)
-  const resources  = useGameStore(s => s.resources)
-  const coins      = useGameStore(s => s.coins)
+function UpgradeCard({ uKey }: { uKey: UpgradeKey }) {
+  const state      = useGameStore(s => s)
   const buyUpgrade = useGameStore(s => s.buyUpgrade)
 
-  const tiers: (1 | 2 | 3)[] = [1, 2, 3]
+  const cfg       = UPGRADES[uKey]
+  const purchased = state.upgrades[uKey]
+
+  let canAfford = true
+  for (const [res, amt] of Object.entries(cfg.cost)) {
+    if (amt === undefined) continue
+    if (res === 'coins') { if (state.coins < amt) canAfford = false }
+    else { if ((state.resources[res as keyof typeof RESOURCES] ?? 0) < amt) canAfford = false }
+  }
 
   return (
-    <div className="flex flex-col gap-6">
-      {tiers.map(tier => {
-        const tierKeys = UPGRADE_KEYS.filter(k => UPGRADES[k].tier === tier)
+    <div
+      style={{
+        background: 'var(--c-surface)',
+        border: `1px solid ${purchased ? 'rgba(34,197,94,0.3)' : canAfford ? 'rgba(59,130,246,0.25)' : 'var(--c-border)'}`,
+        borderRadius: 10,
+        padding: '14px 16px',
+        opacity: purchased ? 0.7 : 1,
+        position: 'relative',
+        overflow: 'hidden',
+      }}
+    >
+      {/* Purchased overlay */}
+      {purchased && (
+        <div style={{
+          position: 'absolute', top: 8, right: 10,
+          fontSize: 9, fontFamily: 'monospace', letterSpacing: '0.1em',
+          color: 'var(--c-green)', fontWeight: 700,
+        }}>
+          ✓ ACTIVE
+        </div>
+      )}
 
-        return (
-          <div key={tier}>
-            {/* Tier header */}
-            <div
-              className="cr-label mb-3"
-              style={{ color: TIER_COLOR[tier], fontSize: 10 }}
-            >
-              {TIER_LABELS[tier]}
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {tierKeys.map(key => {
-                const cfg    = UPGRADES[key]
-                const bought = upgrades[key]
-
-                let canAfford = true
-                for (const [res, amt] of Object.entries(cfg.cost)) {
-                  if (res === 'coins') { if (coins < amt) canAfford = false }
-                  else { if ((resources[res as keyof typeof resources] ?? 0) < amt) canAfford = false }
-                }
-
-                return (
-                  <div
-                    key={key}
-                    className="cr-station"
-                    style={{
-                      opacity: bought ? 0.65 : 1,
-                      borderColor: bought
-                        ? 'rgba(0, 224, 120, 0.35)'
-                        : canAfford
-                        ? `${TIER_COLOR[tier]}55`
-                        : 'var(--c-border)',
-                      boxShadow: bought
-                        ? '0 0 12px rgba(0, 224, 120, 0.06)'
-                        : canAfford
-                        ? `0 0 18px ${TIER_COLOR[tier]}18`
-                        : 'none',
-                    }}
-                  >
-                    {/* Header */}
-                    <div className="flex items-start gap-3">
-                      <span style={{ fontSize: 26 }}>{cfg.icon}</span>
-                      <div className="flex-1 min-w-0">
-                        <div
-                          style={{
-                            fontFamily: "'JetBrains Mono', monospace",
-                            fontSize: 12,
-                            fontWeight: 700,
-                            letterSpacing: '0.04em',
-                            textTransform: 'uppercase',
-                            color: bought ? 'var(--c-green)' : 'var(--c-bright)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8,
-                          }}
-                        >
-                          {cfg.label}
-                          {bought && (
-                            <span style={{ fontSize: 9, color: 'var(--c-green)', letterSpacing: '0.1em' }}>
-                              ✓ ACTIVE
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 10, color: 'var(--c-dim)', marginTop: 3 }}>
-                          {cfg.desc}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Cost + buy */}
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex flex-wrap gap-2">
-                        {Object.entries(cfg.cost).map(([res, amt]) => {
-                          const icon   = res === 'coins' ? '🪙' : RESOURCES[res as keyof typeof RESOURCES]?.icon ?? '?'
-                          const have   = res === 'coins' ? coins : (resources[res as keyof typeof resources] ?? 0)
-                          const enough = bought || have >= amt
-                          return (
-                            <span
-                              key={res}
-                              className="cr-value"
-                              style={{
-                                fontSize: 11,
-                                color: enough ? 'var(--c-green)' : 'var(--c-red)',
-                              }}
-                            >
-                              {icon} {fmt(amt)}
-                            </span>
-                          )
-                        })}
-                      </div>
-
-                      <button
-                        onClick={() => buyUpgrade(key as UpgradeKey)}
-                        disabled={bought || !canAfford}
-                        className={`cr-btn shrink-0 ${
-                          bought      ? 'cr-btn-dim'
-                          : canAfford ? 'cr-btn-green'
-                          :             'cr-btn-dim'
-                        }`}
-                        style={{ cursor: bought ? 'default' : canAfford ? 'pointer' : 'not-allowed' }}
-                      >
-                        {bought ? '✓ ACTIVE' : '+ INSTALL'}
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+      <div className="flex items-start gap-3">
+        <span style={{ fontSize: 22, flexShrink: 0 }}>{cfg.icon}</span>
+        <div className="flex-1 min-w-0">
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-bright)', marginBottom: 2 }}>
+            {cfg.label}
           </div>
-        )
-      })}
+          <div style={{ fontSize: 10, color: 'var(--c-dim)', lineHeight: 1.5, marginBottom: 8 }}>
+            {cfg.desc}
+          </div>
+
+          {/* Cost */}
+          <div style={{ fontSize: 9, color: 'var(--c-dim)', fontFamily: 'monospace', marginBottom: 8 }}>
+            COST: {Object.entries(cfg.cost)
+              .filter(([, v]) => v !== undefined)
+              .map(([r, v]) => `${fmt(v ?? 0)} ${r === 'coins' ? '◆ coins' : RESOURCES[r as keyof typeof RESOURCES]?.label ?? r}`)
+              .join(' · ')}
+          </div>
+
+          {!purchased && (
+            <button
+              onClick={() => buyUpgrade(uKey)}
+              disabled={!canAfford}
+              className={`cr-btn ${canAfford ? 'cr-btn-orange' : 'cr-btn-dim'}`}
+              style={{ width: '100%', padding: '6px 0' }}
+            >
+              {canAfford ? 'ACQUIRE' : 'INSUFFICIENT RESOURCES'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── R&D Node ──────────────────────────────────────────────────────────────────
+
+function RdNodeCard({ nKey }: { nKey: RdNodeKey }) {
+  const state    = useGameStore(s => s)
+  const buyRdNode = useGameStore(s => s.buyRdNode)
+
+  const node       = RD_NODES[nKey]
+  const researched = !!state.rdNodes[nKey]
+
+  const prereqsMet = node.requires.every(r => !!state.rdNodes[r])
+  const canAfford  = state.coins >= node.cost.coins && prereqsMet
+
+  const borderColor = researched
+    ? 'rgba(34,197,94,0.35)'
+    : !prereqsMet
+    ? 'var(--c-border)'
+    : canAfford
+    ? 'rgba(167,139,250,0.35)'
+    : 'var(--c-border)'
+
+  return (
+    <div
+      style={{
+        background: 'var(--c-surface)',
+        border: `1px solid ${borderColor}`,
+        borderRadius: 10,
+        padding: '14px 16px',
+        opacity: !prereqsMet && !researched ? 0.5 : 1,
+        position: 'relative',
+        overflow: 'hidden',
+      }}
+    >
+      {researched && (
+        <div style={{
+          position: 'absolute', top: 8, right: 10,
+          fontSize: 9, fontFamily: 'monospace', letterSpacing: '0.1em',
+          color: 'var(--c-green)', fontWeight: 700,
+        }}>
+          ✓ DONE
+        </div>
+      )}
+
+      <div className="flex items-start gap-3">
+        <span style={{ fontSize: 22, flexShrink: 0 }}>{node.icon}</span>
+        <div className="flex-1 min-w-0">
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-bright)', marginBottom: 2 }}>
+            {node.label}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--c-dim)', lineHeight: 1.5, marginBottom: 6 }}>
+            {node.desc}
+          </div>
+
+          {/* Prerequisites */}
+          {node.requires.length > 0 && (
+            <div style={{ fontSize: 9, fontFamily: 'monospace', color: 'var(--c-dim)', marginBottom: 6 }}>
+              REQUIRES: {node.requires.map(r => RD_NODES[r]?.label ?? r).join(', ')}
+            </div>
+          )}
+
+          {/* Cost */}
+          <div style={{ fontSize: 9, color: 'var(--c-dim)', fontFamily: 'monospace', marginBottom: 8 }}>
+            COST: {node.cost.coins} ◆ coins
+          </div>
+
+          {!researched && (
+            <button
+              onClick={() => buyRdNode(nKey)}
+              disabled={!canAfford}
+              className={`cr-btn ${canAfford ? 'cr-btn-purple' : 'cr-btn-dim'}`}
+              style={{ width: '100%', padding: '6px 0' }}
+            >
+              {!prereqsMet ? 'LOCKED' : canAfford ? 'RESEARCH' : 'INSUFFICIENT COINS'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main export ───────────────────────────────────────────────────────────────
+
+export function UpgradesTab() {
+  return (
+    <div className="flex flex-col gap-8">
+
+      {/* Operational Upgrades */}
+      <section>
+        <div className="cr-label mb-4">Operational Upgrades</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>
+          {UPGRADE_KEYS.map(k => <UpgradeCard key={k} uKey={k} />)}
+        </div>
+      </section>
+
+      {/* R&D Tree */}
+      <section>
+        <div style={{ marginBottom: 4 }}>
+          <div className="cr-label">Research & Development Tree</div>
+        </div>
+        <div
+          style={{
+            fontSize: 10, color: 'var(--c-dim)', fontFamily: 'monospace',
+            marginBottom: 14, lineHeight: 1.6,
+          }}
+        >
+          R&D bonuses are <strong style={{ color: 'var(--c-purple)' }}>permanent</strong> — they survive Corporate Ladder rank-ups.
+          Prerequisites must be researched first.
+        </div>
+
+        {/* Tree visualization with dependency arrows */}
+        <div style={{ position: 'relative' }}>
+          {/* Simple tier layout */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+            {RD_NODE_KEYS.map(k => <RdNodeCard key={k} nKey={k} />)}
+          </div>
+        </div>
+      </section>
     </div>
   )
 }

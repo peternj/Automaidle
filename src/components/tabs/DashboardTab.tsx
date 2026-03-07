@@ -1,404 +1,333 @@
-import type { ReactNode, CSSProperties } from 'react'
-import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip,
-  Legend, ResponsiveContainer, Cell,
-} from 'recharts'
+import { useState, useEffect } from 'react'
 import { useGameStore } from '../../store/gameStore'
-import {
-  useCoinChartData,
-  useProductionRatesData, useMarketChartData,
-} from '../../hooks/useChartData'
-import { RESOURCES, RESOURCE_KEYS, BUILDINGS, BUILDING_KEYS, MARKET } from '../../engine/config'
+import { RESOURCES } from '../../engine/config'
+import { canRankUp, getNextRank } from '../../engine/GameEngine'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
-// ─── Formatting ──────────────────────────────────────────────────────────────
-function fmt(n: number) {
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B'
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
+function fmt(n: number): string {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
   return Math.floor(n).toString()
 }
 function fmtDec(n: number, d = 1) { return n.toFixed(d) }
 
-// ─── Shared chart style ───────────────────────────────────────────────────────
-const CT = {
-  grid:  'rgba(0,190,230,0.06)',
-  axis:  '#2a4858',
-  tt: {
-    contentStyle: {
-      background: '#06111e',
-      border: '1px solid rgba(0,190,230,0.2)',
-      borderRadius: 3,
-      fontSize: 10,
-      fontFamily: "'JetBrains Mono', monospace",
-      color: '#9ec8d8',
-      padding: '6px 10px',
-    },
-    labelStyle: { color: '#3d6070', fontSize: 9 },
-  },
-  tickStyle: { fontSize: 8, fill: '#2a4858', fontFamily: "'JetBrains Mono', monospace" },
+function fmtDps(n: number): string {
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
+  return n.toFixed(2)
 }
 
-// ─── Mini sparkline (inline SVG) ─────────────────────────────────────────────
-function Sparkline({ data, color = 'var(--c-cyan)', height = 28 }: {
-  data: number[]
-  color?: string
-  height?: number
-}) {
-  if (data.length < 2) return null
-  const max = Math.max(...data)
-  const min = Math.min(...data)
-  const range = max - min || 1
-  const w = 100, h = height
-  const pts = data.map((v, i) => {
-    const x = (i / (data.length - 1)) * w
-    const y = h - ((v - min) / range) * (h - 2) - 1
-    return `${x},${y}`
-  }).join(' ')
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="bi-sparkline" preserveAspectRatio="none">
-      <polyline
-        fill="none"
-        stroke={color}
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-        points={pts}
-      />
-    </svg>
-  )
-}
+// ── Circular gauge (decorative, Operator view) ────────────────────────────────
 
-// ─── Tile wrapper ─────────────────────────────────────────────────────────────
-function Tile({
-  title, badge, accent = 'var(--c-cyan)', children, style,
-}: {
-  title: string
-  badge?: string
-  accent?: string
-  children: ReactNode
-  style?: CSSProperties
-}) {
+function CircularGauge({ label, value, color, unit }: { label: string; value: number; color: string; unit: string }) {
+  const pct  = Math.min(value, 100)
+  const circ = 2 * Math.PI * 36   // r=36
+  const dash = (pct / 100) * circ
+  const gap  = circ - dash
+
   return (
-    <div className="bi-tile" style={{ '--bi-accent': accent, ...style } as CSSProperties}>
-      <div className="bi-tile-header">
-        <span className="bi-tile-title">{title}</span>
-        {badge && <span className="bi-tile-badge">{badge}</span>}
+    <div className="flex flex-col items-center gap-2">
+      <div style={{ position: 'relative', width: 90, height: 90 }}>
+        <svg viewBox="0 0 90 90" width="90" height="90">
+          {/* Track */}
+          <circle cx="45" cy="45" r="36" fill="none" stroke="rgba(59,130,246,0.1)" strokeWidth="5" />
+          {/* Fill */}
+          <circle
+            cx="45" cy="45" r="36"
+            fill="none"
+            stroke={color}
+            strokeWidth="5"
+            strokeLinecap="round"
+            strokeDasharray={`${dash} ${gap}`}
+            transform="rotate(-90 45 45)"
+            style={{ transition: 'stroke-dasharray 0.8s ease' }}
+          />
+        </svg>
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 700, color }}>
+            {Math.round(pct)}
+          </span>
+          <span style={{ fontSize: 8, color: 'var(--c-dim)', letterSpacing: '0.1em' }}>{unit}</span>
+        </div>
       </div>
-      <div className="bi-tile-body">{children}</div>
+      <span style={{ fontSize: 9, color: 'var(--c-dim)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+        {label}
+      </span>
     </div>
   )
 }
 
-// ─── KPI tile ─────────────────────────────────────────────────────────────────
-function KpiTile({
-  title, value, sub, accent, trend, trendLabel, sparkData,
-}: {
-  title: string
-  value: string
-  sub: string
-  accent: string
-  trend?: 'up' | 'down' | 'flat'
-  trendLabel?: string
-  sparkData?: number[]
-}) {
-  const trendIcon = trend === 'up' ? '▲' : trend === 'down' ? '▼' : '●'
-  const trendClass = trend === 'up' ? 'bi-kpi-trend-up' : trend === 'down' ? 'bi-kpi-trend-down' : 'bi-kpi-trend-flat'
+// ── Operator View ─────────────────────────────────────────────────────────────
+
+function OperatorView() {
+  const manualExtract = useGameStore(s => s.manualExtract)
+  const resources     = useGameStore(s => s.resources)
+  const buildings     = useGameStore(s => s.buildings)
+  const tick          = useGameStore(s => s.tick)
+
+  // Decorative gauge values with jitter
+  const [pressure, setPressure] = useState(72)
+  const [temp, setTemp]         = useState(58)
+  const [flow, setFlow]         = useState(85)
+
+  useEffect(() => {
+    if (tick % 3 === 0) {
+      setPressure(prev => Math.max(40, Math.min(95, prev + (Math.random() - 0.5) * 8)))
+      setTemp(prev     => Math.max(35, Math.min(80, prev + (Math.random() - 0.5) * 6)))
+      setFlow(prev     => Math.max(60, Math.min(100, prev + (Math.random() - 0.5) * 5)))
+    }
+  }, [tick])
+
+  const totalBuildings = Object.values(buildings).reduce((a, b) => a + b, 0)
+  const siliconPct     = Math.round((resources.silicon / RESOURCES.silicon.cap) * 100)
+  const nitrogenPct    = Math.round((resources.nitrogen / RESOURCES.nitrogen.cap) * 100)
 
   return (
-    <Tile title={title} accent={accent}>
-      <div className="bi-kpi">
-        <div>
-          <div className="bi-kpi-value" style={{ fontSize: 26 }}>{value}</div>
-          <div className="bi-kpi-sub">{sub}</div>
-        </div>
-        {sparkData && <Sparkline data={sparkData} color={accent} />}
-        {trendLabel && (
-          <div className={`bi-kpi-trend ${trendClass}`}>
-            {trendIcon} {trendLabel}
+    <div className="flex flex-col gap-6 max-w-2xl mx-auto">
+      {/* Header card */}
+      <div className="cr-process-tile">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <div style={{ fontSize: 11, fontFamily: 'monospace', letterSpacing: '0.12em', color: 'var(--c-dim)', textTransform: 'uppercase' }}>
+              Unit 01 — Crystal Growth System
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-bright)', marginTop: 4 }}>
+              Laser Extraction Unit
+            </div>
           </div>
-        )}
+          <div className="flex items-center gap-2">
+            <div className="cr-led cr-led-green" />
+            <span style={{ fontSize: 10, color: 'var(--c-green)', fontFamily: 'monospace', letterSpacing: '0.1em' }}>ONLINE</span>
+          </div>
+        </div>
+
+        {/* Status row */}
+        <div className="flex gap-4 mb-6">
+          {[
+            { label: 'Silicon', val: `${resources.silicon}/${RESOURCES.silicon.cap}`, color: '#60a5fa' },
+            { label: 'N₂ Gas',  val: `${resources.nitrogen}/${RESOURCES.nitrogen.cap}`,  color: '#06b6d4' },
+            { label: 'Units Deployed', val: totalBuildings, color: 'var(--c-green)' },
+          ].map(item => (
+            <div
+              key={item.label}
+              style={{
+                flex: 1, background: 'rgba(59,130,246,0.05)',
+                border: '1px solid var(--c-border)', borderRadius: 8, padding: '10px 14px',
+              }}
+            >
+              <div style={{ fontSize: 9, color: 'var(--c-dim)', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 4 }}>
+                {item.label}
+              </div>
+              <div style={{ fontSize: 16, fontFamily: 'monospace', fontWeight: 700, color: item.color }}>
+                {item.val}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* MANUAL OVERRIDE button */}
+        <button
+          className="cr-override-btn animate-override-glow"
+          onClick={manualExtract}
+        >
+          <span style={{ fontSize: 20 }}>◈</span>
+          <span>Manual Override — Extract Silicon</span>
+        </button>
+
+        <div style={{ fontSize: 9, textAlign: 'center', marginTop: 8, color: 'var(--c-dim)', fontFamily: 'monospace', letterSpacing: '0.1em' }}>
+          Click to manually extract 1 silicon wafer · Automate via Crystal Grower in Buildings
+        </div>
       </div>
-    </Tile>
+
+      {/* Instrument gauges */}
+      <div
+        style={{
+          background: 'var(--c-surface)',
+          border: '1px solid var(--c-border)',
+          borderRadius: 12,
+          padding: '20px 24px',
+        }}
+      >
+        <div className="cr-label mb-5">Process Instruments</div>
+        <div className="flex justify-around">
+          <CircularGauge label="N₂ Pressure" value={pressure}       color="var(--c-sky)"    unit="%" />
+          <CircularGauge label="Temp"         value={temp}           color="var(--c-orange)" unit="°C" />
+          <CircularGauge label="Flow Rate"    value={flow}           color="var(--c-green)"  unit="%" />
+          <CircularGauge label="Silicon Fill" value={siliconPct}    color="#60a5fa"         unit="%" />
+          <CircularGauge label="N₂ Fill"      value={nitrogenPct}   color="#06b6d4"         unit="%" />
+        </div>
+      </div>
+
+      {/* Quick tips */}
+      <div
+        style={{
+          background: 'rgba(59,130,246,0.04)', border: '1px solid var(--c-border)',
+          borderRadius: 10, padding: '14px 18px',
+        }}
+      >
+        <div className="cr-label mb-2">Operator Notes</div>
+        <div style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--c-dim)', lineHeight: 1.8 }}>
+          › Build Crystal Growers and N₂ Gas Plants in the <strong style={{ color: 'var(--c-text)' }}>Buildings</strong> tab to automate production<br />
+          › Sell resources in the <strong style={{ color: 'var(--c-text)' }}>Market</strong> panel (right sidebar) to earn coins<br />
+          › Earn $1,000 total revenue to unlock <strong style={{ color: 'var(--c-sky)' }}>Department Manager</strong> rank<br />
+          › Monitor alarms in the right panel — critical alarms require immediate attention
+        </div>
+      </div>
+    </div>
   )
 }
 
-// ─── Dashboard ────────────────────────────────────────────────────────────────
-export function DashboardTab() {
-  const tick             = useGameStore(s => s.tick)
-  const stats            = useGameStore(s => s.stats)
-  const coins            = useGameStore(s => s.coins)
-  const resources        = useGameStore(s => s.resources)
-  const buildings        = useGameStore(s => s.buildings)
-  const marketPrices     = useGameStore(s => s.marketPrices)
-  const productionRates  = useGameStore(s => s.productionRates)
-  const starvedBuildings = useGameStore(s => s.starvedBuildings)
+// ── KPI Tile ──────────────────────────────────────────────────────────────────
 
-  const coinData      = useCoinChartData()
-  const ratesData     = useProductionRatesData()
-  const marketData    = useMarketChartData()
+function KpiTile({
+  label, value, sub, color, icon,
+}: { label: string; value: string; sub?: string; color: string; icon: string }) {
+  return (
+    <div className={`cr-kpi-tile cr-kpi-${color}`}>
+      <div className="flex items-start justify-between mb-2">
+        <span style={{ fontSize: 9, fontFamily: 'monospace', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--c-dim)' }}>
+          {label}
+        </span>
+        <span style={{ fontSize: 16, opacity: 0.4 }}>{icon}</span>
+      </div>
+      <div style={{ fontSize: 24, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: `var(--c-${color === 'blue' ? 'sky' : color === 'orange' ? 'orange' : color === 'green' ? 'green' : color === 'purple' ? 'purple' : 'amber'})` }}>
+        {value}
+      </div>
+      {sub && (
+        <div style={{ fontSize: 9, color: 'var(--c-dim)', marginTop: 4, fontFamily: 'monospace' }}>{sub}</div>
+      )}
+    </div>
+  )
+}
 
-  // ── Derived KPIs ──────────────────────────────────────────────────────────
+// ── Manager+ Dashboard ────────────────────────────────────────────────────────
 
-  // Revenue/sec = sum of (positive production rate × current market price)
-  const revPerSec = RESOURCE_KEYS.reduce((sum, key) => {
-    const rate = productionRates[key] ?? 0
-    return rate > 0 ? sum + rate * (marketPrices[key] ?? 0) : sum
-  }, 0)
+function ManagerDashboard() {
+  const state         = useGameStore(s => s)
+  const dollarPerSec  = useGameStore(s => s.dollarPerSec)
+  const alarms        = useGameStore(s => s.alarms)
+  const tick          = useGameStore(s => s.tick)
+  const chartData     = useGameStore(s => s.chartData)
+  const buildings     = useGameStore(s => s.buildings)
+  const stats         = useGameStore(s => s.stats)
 
-  // Yield rate = % of active buildings NOT starved
-  const activeBuildings = BUILDING_KEYS.filter(k => buildings[k] > 0)
-  const starvedCount    = activeBuildings.filter(k => (starvedBuildings[k]?.length ?? 0) > 0).length
-  const yieldRate       = activeBuildings.length > 0
-    ? ((activeBuildings.length - starvedCount) / activeBuildings.length) * 100
+  const unackedAlarms = alarms.filter(a => !a.acked).length
+  const totalBuildings = Object.values(buildings).reduce((a, b) => a + b, 0)
+  const uptimePct      = tick > 0 ? Math.min(100, 98 + Math.sin(tick * 0.1) * 1.5).toFixed(1) : '0.0'
+
+  const nextRank = getNextRank(state)
+  const rankPct  = nextRank
+    ? Math.min(100, (state.stats.totalRevenue / nextRank.threshold) * 100)
     : 100
 
-  // Market health = avg (current price / base price) across all resources
-  const marketHealth = RESOURCE_KEYS.reduce((sum, k) => {
-    return sum + (marketPrices[k] / MARKET[k].basePrice)
-  }, 0) / RESOURCE_KEYS.length * 100
+  // Build chart data
+  const chartPoints = chartData.tickLabels.map((t, i) => ({
+    tick: t,
+    coins: chartData.coinHistory[i] ?? 0,
+    revenue: chartData.revenueHistory[i] ?? 0,
+  }))
 
-  // Total items produced
-  const totalProduced = Object.values(stats.totalProduced).reduce((a, b) => a + b, 0)
+  void fmtDec
 
-  // Runtime
-  const mins   = Math.floor(tick / 60)
-  const secs   = tick % 60
-  const runtime = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
-
-  // Coin sparkline
-  const coinSpark = coinData.slice(-20).map(d => d.Coins)
-
-  // Revenue trend from coin history last 10 vs previous 10
-  const coinHist = coinData.map(d => d.Coins)
-  const recentAvg   = coinHist.slice(-5).reduce((a, b) => a + b, 0) / 5 || 0
-  const previousAvg = coinHist.slice(-10, -5).reduce((a, b) => a + b, 0) / 5 || 0
-  const coinTrend   = recentAvg > previousAvg * 1.02 ? 'up' : recentAvg < previousAvg * 0.98 ? 'down' : 'flat'
-
-  // Top 5 resources by current value (rate × price)
-  const topResources = RESOURCE_KEYS
-    .map(k => ({
-      key: k,
-      label: RESOURCES[k].label,
-      icon: RESOURCES[k].icon,
-      color: RESOURCES[k].color,
-      val: resources[k] ?? 0,
-      cap: RESOURCES[k].cap,
-      rate: productionRates[k] ?? 0,
-    }))
-    .filter(r => r.val > 0 || r.rate !== 0)
-    .sort((a, b) => b.val - a.val)
-
-
-  // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col gap-0">
+    <div className="flex flex-col gap-6">
+      {/* KPI row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+        <KpiTile label="Revenue / sec" value={`$${fmtDps(dollarPerSec)}`} sub="5-tick avg" color="green" icon="◆" />
+        <KpiTile label="Coin Balance"  value={`${fmt(state.coins)}`}       sub="available" color="blue"  icon="◈" />
+        <KpiTile label="Active Alarms" value={`${unackedAlarms}`}           sub={unackedAlarms > 0 ? 'requires attention' : 'all clear'} color={unackedAlarms > 0 ? 'orange' : 'green'} icon="⚠" />
+        <KpiTile label="Uptime"        value={`${uptimePct}%`}             sub={`T${fmt(tick)}`}  color="purple" icon="⬡" />
+      </div>
 
-      {/* ── Report header ── */}
-      <div className="bi-report-header">
-        <div>
-          <div className="bi-report-title">Executive Dashboard</div>
-          <div className="bi-report-subtitle">Industrial Empire &nbsp;·&nbsp; Tick {fmt(tick)} &nbsp;·&nbsp; Runtime {runtime}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+        <KpiTile label="Total Revenue" value={`$${fmt(stats.totalRevenue)}`} sub="all-time earnings"    color="green"  icon="◆" />
+        <KpiTile label="Chips Made"    value={`${fmt(stats.chipsProduced)}`} sub="finished microchips" color="blue"   icon="⬡" />
+        <KpiTile label="Buildings"     value={`${totalBuildings}`}            sub="deployed units"      color="purple" icon="◈" />
+      </div>
+
+      {/* Rank progress */}
+      {nextRank && (
+        <div
+          style={{
+            background: 'var(--c-surface)', border: '1px solid var(--c-border)',
+            borderRadius: 10, padding: '16px 20px',
+          }}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div className="cr-label" style={{ flex: 'unset' }}>Corporate Ladder Progress</div>
+            <span style={{ fontSize: 9, fontFamily: 'monospace', color: 'var(--c-dim)', letterSpacing: '0.08em' }}>
+              ${fmt(state.stats.totalRevenue)} / ${fmt(nextRank.threshold)} → {nextRank.label}
+            </span>
+          </div>
+          <div className="cr-gauge-track" style={{ height: 6 }}>
+            <div
+              className="cr-gauge-fill"
+              style={{
+                width: `${rankPct}%`,
+                background: rankPct >= 100
+                  ? 'var(--c-amber)'
+                  : 'linear-gradient(90deg, var(--c-blue), var(--c-sky))',
+                boxShadow: rankPct >= 100 ? '0 0 12px rgba(245,158,11,0.5)' : undefined,
+              }}
+            />
+          </div>
+          {canRankUp(state) && (
+            <div style={{ marginTop: 8, fontSize: 10, color: 'var(--c-amber)', fontFamily: 'monospace', letterSpacing: '0.08em' }}>
+              ▲ Rank-up available — click RANK UP in the header
+            </div>
+          )}
         </div>
-        <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 9, color: 'var(--c-dim)', fontFamily: 'JetBrains Mono', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Balance</div>
-            <div style={{ fontSize: 18, fontFamily: 'JetBrains Mono', fontWeight: 700, color: 'var(--c-amber)', lineHeight: 1 }}>🪙 {fmt(coins)}</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 9, color: 'var(--c-dim)', fontFamily: 'JetBrains Mono', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Rev/sec</div>
-            <div style={{ fontSize: 18, fontFamily: 'JetBrains Mono', fontWeight: 700, color: 'var(--c-green)', lineHeight: 1 }}>+{fmt(revPerSec)}</div>
-          </div>
-        </div>
-      </div>
+      )}
 
-      {/* ── KPI strip — 5 tiles ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 8 }}>
-        <KpiTile
-          title="Revenue / sec"
-          value={`$${fmt(revPerSec)}`}
-          sub="estimated from production rates"
-          accent="var(--c-green)"
-          trend={coinTrend}
-          trendLabel={coinTrend === 'up' ? 'Growing' : coinTrend === 'down' ? 'Declining' : 'Stable'}
-          sparkData={coinSpark}
-        />
-        <KpiTile
-          title="Yield Rate"
-          value={`${fmtDec(yieldRate, 1)}%`}
-          sub={`${activeBuildings.length - starvedCount} / ${activeBuildings.length} lines active`}
-          accent={yieldRate > 90 ? 'var(--c-green)' : yieldRate > 60 ? 'var(--c-amber)' : 'var(--c-red)'}
-          trend={starvedCount === 0 ? 'up' : starvedCount < 3 ? 'flat' : 'down'}
-          trendLabel={starvedCount === 0 ? 'All nominal' : `${starvedCount} starved`}
-        />
-        <KpiTile
-          title="Coins Earned"
-          value={`$${fmt(stats.coinsEarned)}`}
-          sub="lifetime from sales"
-          accent="var(--c-amber)"
-          sparkData={coinSpark}
-        />
-        <KpiTile
-          title="Items Produced"
-          value={fmt(totalProduced)}
-          sub="all resources combined"
-          accent="var(--c-cyan)"
-        />
-        <KpiTile
-          title="Market Index"
-          value={`${fmtDec(marketHealth, 1)}%`}
-          sub="avg price vs baseline"
-          accent={marketHealth >= 100 ? 'var(--c-green)' : 'var(--c-amber)'}
-          trend={marketHealth >= 105 ? 'up' : marketHealth <= 95 ? 'down' : 'flat'}
-          trendLabel={`${marketHealth >= 100 ? '+' : ''}${fmtDec(marketHealth - 100, 1)}% vs base`}
-        />
-      </div>
-
-      {/* ── Row 2: Coin balance (wide) + Building health ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '7fr 5fr', gap: 8, marginBottom: 8 }}>
-
-        {/* Coin balance area chart */}
-        <Tile title="Balance Over Time" badge="LAST 60 TICKS" accent="var(--c-amber)">
-          <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={coinData}>
-              <defs>
-                <linearGradient id="coinGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor="#ffaa00" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#ffaa00" stopOpacity={0.01} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke={CT.grid} vertical={false} />
-              <XAxis dataKey="tick" tick={CT.tickStyle} stroke={CT.axis} interval="preserveStartEnd" />
-              <YAxis tick={CT.tickStyle} stroke={CT.axis} width={42} tickFormatter={fmt} />
-              <Tooltip {...CT.tt} formatter={(v: number) => [`$${fmt(v)}`, 'Balance']} />
-              <Area
-                type="monotone"
-                dataKey="Coins"
-                stroke="#ffaa00"
-                strokeWidth={2}
-                fill="url(#coinGrad)"
-                dot={false}
-                isAnimationActive={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </Tile>
-
-        {/* Building health status */}
-        <Tile title="Building Status" accent="var(--c-cyan)">
-          <div style={{ overflowY: 'auto', flex: 1 }}>
-            {BUILDING_KEYS.map(key => {
-              const count   = buildings[key]
-              const cfg     = BUILDINGS[key]
-              const isActive = count > 0
-              const isStarved = isActive && (starvedBuildings[key]?.length ?? 0) > 0
-              const dotColor = !isActive ? 'var(--c-dim)' : isStarved ? 'var(--c-amber)' : 'var(--c-green)'
-              const dotGlow  = isActive && !isStarved
-                ? '0 0 5px var(--c-green)'
-                : isStarved
-                ? '0 0 5px var(--c-amber)'
-                : 'none'
-              return (
-                <div key={key} className="bi-status-row">
-                  <span className="bi-status-dot" style={{ background: dotColor, boxShadow: dotGlow }} />
-                  <span className="bi-status-label">{cfg.label}</span>
-                  <span className="bi-status-count" style={{ color: isActive ? 'var(--c-text)' : 'var(--c-dim)' }}>
-                    {count}/{cfg.maxCount}
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        </Tile>
-      </div>
-
-      {/* ── Row 3: Production rates + Market prices + Resource fill ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '4fr 5fr 3fr', gap: 8 }}>
-
-        {/* Net production rates */}
-        <Tile title="Net Production Rate" badge="/TICK" accent="var(--c-green)">
-          <ResponsiveContainer width="100%" height={175}>
-            <BarChart data={ratesData.filter(d => d.rate !== 0)} layout="vertical">
-              <CartesianGrid stroke={CT.grid} horizontal={false} />
-              <XAxis type="number" tick={CT.tickStyle} stroke={CT.axis} tickFormatter={v => fmtDec(v, 1)} />
-              <YAxis
-                dataKey="name"
-                type="category"
-                tick={CT.tickStyle}
-                stroke={CT.axis}
-                width={82}
-                tickFormatter={v => v.length > 10 ? v.slice(0, 10) + '…' : v}
-              />
-              <Tooltip
-                {...CT.tt}
-                formatter={(v: number) => [`${v > 0 ? '+' : ''}${fmtDec(v, 2)}/tick`, 'Rate']}
-              />
-              <Bar dataKey="rate" radius={2} isAnimationActive={false} maxBarSize={12}>
-                {ratesData.filter(d => d.rate !== 0).map((e, i) => (
-                  <Cell key={i} fill={e.color} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </Tile>
-
-        {/* Market prices over time */}
-        <Tile title="Market Prices" badge="LAST 20 SAMPLES" accent="var(--c-purple)">
-          <ResponsiveContainer width="100%" height={175}>
-            <LineChart data={marketData.points}>
-              <CartesianGrid stroke={CT.grid} vertical={false} />
-              <XAxis dataKey="sample" tick={CT.tickStyle} stroke={CT.axis} />
-              <YAxis tick={CT.tickStyle} stroke={CT.axis} width={32} />
-              <Tooltip {...CT.tt} />
-              <Legend
-                wrapperStyle={{ fontSize: 8, fontFamily: "'JetBrains Mono', monospace", color: '#3d6070', paddingTop: 4 }}
-                iconType="plainline"
-                iconSize={12}
-              />
-              {marketData.datasets.map(ds => (
-                <Line
-                  key={ds.name}
-                  type="monotone"
-                  dataKey={ds.name}
-                  stroke={ds.color}
-                  dot={false}
-                  strokeWidth={1.5}
-                  isAnimationActive={false}
+      {/* Charts */}
+      {chartPoints.length > 5 && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+          {/* Coin history */}
+          <div style={{ background: 'var(--c-surface)', border: '1px solid var(--c-border)', borderRadius: 10, padding: '14px 16px' }}>
+            <div className="cr-label mb-3">Coin Balance History</div>
+            <ResponsiveContainer width="100%" height={120}>
+              <LineChart data={chartPoints}>
+                <XAxis dataKey="tick" hide />
+                <YAxis hide />
+                <Tooltip
+                  contentStyle={{ background: 'var(--c-panel)', border: '1px solid var(--c-border)', borderRadius: 6, fontSize: 10 }}
+                  labelFormatter={v => `T${v}`}
+                  formatter={(v: number) => [fmt(v), 'Coins']}
                 />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </Tile>
-
-        {/* Resource inventory levels */}
-        <Tile title="Inventory Levels" accent="var(--c-cyan)">
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-around' }}>
-            {topResources.slice(0, 9).map(r => {
-              const pct  = Math.min((r.val / r.cap) * 100, 100)
-              const rateColor = r.rate > 0 ? 'var(--c-green)' : r.rate < 0 ? 'var(--c-red)' : 'var(--c-dim)'
-              return (
-                <div key={r.key} className="bi-res-row">
-                  <span className="bi-res-label">{r.icon} {r.label}</span>
-                  <div className="bi-res-bar-track">
-                    <div
-                      className="bi-res-bar-fill"
-                      style={{ width: `${pct}%`, background: r.color }}
-                    />
-                  </div>
-                  <span className="bi-res-value" style={{ color: rateColor, fontSize: 8 }}>
-                    {r.rate > 0 ? '+' : ''}{fmtDec(r.rate, 1)}
-                  </span>
-                </div>
-              )
-            })}
-            {topResources.length === 0 && (
-              <span style={{ fontSize: 9, color: 'var(--c-dim)', fontFamily: 'JetBrains Mono', fontStyle: 'italic' }}>
-                — no active resources —
-              </span>
-            )}
+                <Line type="monotone" dataKey="coins" stroke="var(--c-sky)" strokeWidth={1.5} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
-        </Tile>
-      </div>
 
+          {/* Revenue history */}
+          <div style={{ background: 'var(--c-surface)', border: '1px solid var(--c-border)', borderRadius: 10, padding: '14px 16px' }}>
+            <div className="cr-label mb-3">Revenue per Tick</div>
+            <ResponsiveContainer width="100%" height={120}>
+              <LineChart data={chartPoints}>
+                <XAxis dataKey="tick" hide />
+                <YAxis hide />
+                <Tooltip
+                  contentStyle={{ background: 'var(--c-panel)', border: '1px solid var(--c-border)', borderRadius: 6, fontSize: 10 }}
+                  labelFormatter={v => `T${v}`}
+                  formatter={(v: number) => [fmt(v), '$/tick']}
+                />
+                <Line type="monotone" dataKey="revenue" stroke="var(--c-green)" strokeWidth={1.5} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+// ── Main export ───────────────────────────────────────────────────────────────
+
+export function DashboardTab({ forceOperator }: { forceOperator?: boolean } = {}) {
+  const rankIndex = useGameStore(s => s.rankIndex)
+
+  if (forceOperator || rankIndex === 0) return <OperatorView />
+  return <ManagerDashboard />
 }
